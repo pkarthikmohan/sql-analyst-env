@@ -1,0 +1,163 @@
+name: sql-analyst-env
+version: "1.0.0"
+description: >
+  A real-world SQL data analyst environment where an AI agent must write
+  correct SQL queries against an e-commerce database to answer business questions.
+  Tasks range from simple aggregations (Easy) to window functions and CTEs (Hard).
+
+author: "Hackathon Submission"
+license: MIT
+
+environment:
+  type: http
+  base_url: "http://0.0.0.0:7860"
+
+endpoints:
+  reset:
+    method: POST
+    path: /reset
+    description: Load a task. Returns task description and database schema.
+    request_body:
+      task_id:
+        type: integer
+        description: "1 = Easy, 2 = Medium, 3 = Hard"
+        required: true
+    response:
+      observation:
+        type: object
+        properties:
+          task_id:          { type: integer }
+          difficulty:       { type: string }
+          task_description: { type: string }
+          schema:           { type: string }
+          hint:             { type: string }
+      info:
+        type: object
+
+  step:
+    method: POST
+    path: /step
+    description: Submit a SQL query. Returns reward 0.0-1.0 and result preview.
+    request_body:
+      action:
+        type: string
+        description: A valid SQLite SELECT or WITH (CTE) statement.
+        required: true
+    response:
+      observation:
+        type: object
+        properties:
+          task_id:          { type: integer }
+          task_description: { type: string }
+          sql_submitted:    { type: string }
+          result_preview:   { type: array }
+          result_row_count: { type: integer }
+          reward_breakdown:
+            type: object
+            properties:
+              column_score:       { type: number }
+              row_score:          { type: number }
+              value_score:        { type: number }
+              total_reward:       { type: number }
+              expected_columns:   { type: array }
+              agent_columns:      { type: array }
+              expected_row_count: { type: integer }
+              agent_row_count:    { type: integer }
+      reward:
+        type: number
+        minimum: 0.0
+        maximum: 1.0
+        description: Partial score. 1.0 = perfect answer.
+      done:
+        type: boolean
+        description: True when reward reaches 1.0
+      info:
+        type: object
+
+  state:
+    method: GET
+    path: /state
+    description: Get current task, attempt count, best reward, and full history.
+    response:
+      task_id:          { type: integer }
+      task_description: { type: string }
+      schema_info:      { type: string }
+      attempts:         { type: integer }
+      best_reward:      { type: number }
+      history:          { type: array }
+
+observation_space:
+  description: >
+    On reset: task description, database schema (3 tables), difficulty, hint.
+    On step: submitted SQL, result preview (first 5 rows), row count,
+    reward breakdown (column / row / value sub-scores).
+
+action_space:
+  type: string
+  description: >
+    A single SQLite-compatible SELECT or WITH statement.
+    Only read operations are permitted. INSERT/UPDATE/DELETE are rejected.
+  examples:
+    - "SELECT COUNT(*) AS total_orders FROM orders WHERE status = 'completed'"
+    - "SELECT c.first_name, SUM(o.total_amount) AS revenue FROM orders o JOIN customers c ON o.customer_id = c.customer_id GROUP BY o.customer_id ORDER BY revenue DESC LIMIT 5"
+    - "WITH rev AS (SELECT p.category, SUM(o.total_amount) AS total FROM orders o JOIN products p ON o.product_id = p.product_id GROUP BY p.category) SELECT *, RANK() OVER (ORDER BY total DESC) AS rnk FROM rev"
+
+reward:
+  type: float
+  range: [0.0, 1.0]
+  description: >
+    Partial credit reward with three components:
+      - Column names correct : 0.30
+      - Row count correct    : 0.30
+      - Cell values correct  : 0.40
+  partial_credit: true
+
+tasks:
+  - id: 1
+    name: "Count completed orders"
+    difficulty: easy
+    description: >
+      Find the total number of completed orders placed in 2024.
+      Return a single number with column name: total_orders.
+
+  - id: 2
+    name: "Top 5 customers by revenue"
+    difficulty: medium
+    description: >
+      Find the top 5 customers by total revenue from completed orders.
+      Return: first_name, last_name, total_revenue. Order by revenue DESC.
+
+  - id: 3
+    name: "Category revenue ranking"
+    difficulty: hard
+    description: >
+      For each product category, calculate total revenue and rank using
+      a window function. Return: category, total_revenue, revenue_rank.
+      Order by revenue_rank ASC.
+
+database:
+  engine: SQLite
+  path: data/ecommerce.db
+  tables:
+    customers:
+      rows: 100
+      columns: [customer_id, first_name, last_name, email, city, signup_date]
+    products:
+      rows: 30
+      columns: [product_id, product_name, category, price, stock]
+    orders:
+      rows: 600
+      columns: [order_id, customer_id, product_id, quantity, total_amount, order_date, status]
+
+hardware:
+  min_cpu: 1
+  min_ram_gb: 1
+  notes: "Runs on 2 vCPU / 8GB RAM. No GPU required."
+
+inference:
+  script: inference.py
+  max_runtime_minutes: 20
+  llm_env_vars:
+    - API_BASE_URL
+    - MODEL_NAME
+    - HF_TOKEN

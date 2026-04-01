@@ -1,0 +1,30 @@
+{
+  "results": [
+    {
+      "task_id": 1,
+      "difficulty": "easy",
+      "best_reward": 1.0,
+      "attempts": 1,
+      "final_sql": "SELECT COUNT(*) AS total_orders \nFROM orders \nWHERE status = 'completed' AND STRFTIME('%Y', order_date) = '2024'",
+      "solved": true
+    },
+    {
+      "task_id": 2,
+      "difficulty": "medium",
+      "best_reward": 1.0,
+      "attempts": 1,
+      "final_sql": "SELECT c.first_name, c.last_name, SUM(o.total_amount) AS total_revenue\nFROM customers c\nJOIN orders o ON c.customer_id = o.customer_id\nWHERE o.status = 'completed'\nGROUP BY c.customer_id, c.first_name, c.last_name\nORDER BY total_revenue DESC\nLIMIT 5;",
+      "solved": true
+    },
+    {
+      "task_id": 3,
+      "difficulty": "hard",
+      "best_reward": 1.0,
+      "attempts": 1,
+      "final_sql": "WITH category_revenue AS (\n  SELECT p.category, SUM(o.total_amount) AS total_revenue\n  FROM orders o\n  JOIN products p ON o.product_id = p.product_id\n  WHERE o.status = 'completed'\n  GROUP BY p.category\n)\nSELECT category, total_revenue, RANK() OVER (ORDER BY total_revenue DESC) AS revenue_rank\nFROM category_revenue\nORDER BY revenue_rank ASC;",
+      "solved": true
+    }
+  ],
+  "avg_score": 1.0,
+  "tasks_solved": 3
+}
