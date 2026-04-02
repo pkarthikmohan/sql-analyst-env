@@ -7,6 +7,8 @@ import json
 import time
 import requests
 from openai import OpenAI
+from dotenv import load_dotenv
+load_dotenv()
 
 ENV_BASE_URL = "https://p-karthik-mohan-sql-analyst-env.hf.space"
 MAX_ATTEMPTS = 5
