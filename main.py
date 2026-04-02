@@ -59,7 +59,7 @@ TASKS = {
         "hint": "JOIN orders with customers, GROUP BY customer, filter completed, ORDER and LIMIT",
         "answer_query": """
             SELECT c.first_name, c.last_name,
-                   ROUND(SUM(o.total_amount), 2) AS total_revenue
+                   SUM(o.total_amount) AS total_revenue
             FROM orders o
             JOIN customers c ON o.customer_id = c.customer_id
             WHERE o.status = 'completed'
@@ -133,8 +133,7 @@ TASKS = {
         "description": (
             "Calculate the month-over-month revenue growth percentage for completed orders in 2024. "
             "For each month show total revenue and percentage change vs previous month. "
-             "Return columns: month, total_revenue, prev_revenue, growth_pct. "
-            "Format month as YYYY-MM (e.g. 2024-01). "
+            "Return columns: month, total_revenue, prev_revenue, growth_pct. "
             "Order by month ascending. Round growth_pct to 2 decimal places. "
             "For the first month, prev_revenue and growth_pct should be NULL."
         ),
@@ -142,8 +141,8 @@ TASKS = {
         "hint": "Use LAG() window function to get previous month revenue, then calculate (current - prev) / prev * 100",
         "answer_query": """
             WITH monthly AS (
-                SELECT STRFTIME('%Y-%m', order_date) AS month,
-                       SUM(o.total_amount) AS total_revenue
+                SELECT STRFTIME('%m', order_date) AS month,
+                       ROUND(SUM(total_amount), 2) AS total_revenue
                 FROM orders
                 WHERE status = 'completed'
                   AND order_date LIKE '2024%'
@@ -207,12 +206,12 @@ TASKS = {
                 SELECT c.customer_id,
                        c.first_name,
                        c.last_name,
-                        ROUND(SUM(CASE
+                       SUM(CASE
                            WHEN STRFTIME('%m', o.order_date) BETWEEN '01' AND '06'
-                           THEN o.total_amount ELSE 0 END), 1) AS h1_revenue,
-                       ROUND(SUM(CASE
+                           THEN o.total_amount ELSE 0 END) AS h1_revenue,
+                       SUM(CASE
                            WHEN STRFTIME('%m', o.order_date) BETWEEN '07' AND '12'
-                           THEN o.total_amount ELSE 0 END), 1) AS h2_revenue
+                           THEN o.total_amount ELSE 0 END) AS h2_revenue
                 FROM orders o
                 JOIN customers c ON o.customer_id = c.customer_id
                 WHERE o.status = 'completed'
