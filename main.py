@@ -143,7 +143,7 @@ TASKS = {
         "answer_query": """
             WITH monthly AS (
                 SELECT STRFTIME('%Y-%m', order_date) AS month,
-                       ROUND(SUM(total_amount), 2) AS total_revenue
+                       SUM(o.total_amount) AS total_revenue
                 FROM orders
                 WHERE status = 'completed'
                   AND order_date LIKE '2024%'
@@ -207,12 +207,12 @@ TASKS = {
                 SELECT c.customer_id,
                        c.first_name,
                        c.last_name,
-                       ROUND(SUM(CASE
+                        ROUND(SUM(CASE
                            WHEN STRFTIME('%m', o.order_date) BETWEEN '01' AND '06'
-                           THEN o.total_amount ELSE 0 END), 2) AS h1_revenue,
+                           THEN o.total_amount ELSE 0 END), 1) AS h1_revenue,
                        ROUND(SUM(CASE
                            WHEN STRFTIME('%m', o.order_date) BETWEEN '07' AND '12'
-                           THEN o.total_amount ELSE 0 END), 2) AS h2_revenue
+                           THEN o.total_amount ELSE 0 END), 1) AS h2_revenue
                 FROM orders o
                 JOIN customers c ON o.customer_id = c.customer_id
                 WHERE o.status = 'completed'
@@ -309,7 +309,10 @@ def compute_reward(agent_rows, agent_cols):
             if v is None:
                 return ""
             try:
-                return str(round(float(v), 1))
+                f = round(float(v), 2)
+                if f == int(f):
+                    return str(int(f))
+                return str(round(f, 1))
             except (ValueError, TypeError):
                 return str(v).strip().lower()
 
