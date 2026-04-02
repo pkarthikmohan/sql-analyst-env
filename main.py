@@ -4,117 +4,152 @@ import json
 import re
 from datetime import datetime
 from typing import Any, Optional
-import uuid
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-import gradio as gr
-from ui import build_ui
+from pydantic import BaseModel
 
-# ── Config ────────────────────────────────────────────────────────────────────
 DB_PATH = os.path.join("data", "ecommerce.db")
-# Under /api for direct agent access, root for UI
-api_app = FastAPI(
-    title="SQL Analyst OpenEnv API", 
-    version="1.1.0", 
-    docs_url="/docs", 
-    redoc_url="/redoc",
-    description="A real-world benchmark environment for AI agents writing SQL. Use `/reset` to select a task, `/step` to submit a query and receive partial-credit feedback, and `/state` to track history."
-)
-
-
-# ── Pydantic Models ───────────────────────────────────────────────────────────
+app = FastAPI(title="SQL Analyst OpenEnv", version="1.0.0")
 
 class StepRequest(BaseModel):
-    session_id: str = Field("default", description="Unique session ID to prevent collisions.")
-    action: str = Field(..., description="A valid SQLite SELECT or WITH statement.", examples=["SELECT COUNT(*) AS total_orders FROM orders;"])
+    action: str
 
 class StepResponse(BaseModel):
-    observation: dict = Field(description="Contains result_preview (first 5 rows), reward_breakdown, and any sql execution errors.")
-    reward: float = Field(description="Partial credit reward from 0.0 (wrong) to 1.0 (perfect).")
-    done: bool = Field(description="True if reward == 1.0 (Task solved).")
-    info: dict = Field(description="System message and attempt count.")
+    observation: dict
+    reward: float
+    done: bool
+    info: dict
 
 class ResetRequest(BaseModel):
-    task_id: int = Field(..., description="ID of the task to load (1 to 5).", examples=[1])
-    session_id: str = Field("default", description="Unique session ID.")
+    task_id: int
 
 class ResetResponse(BaseModel):
-    observation: dict = Field(description="Contains task_description, schema, and hint to be passed to the agent.")
-    info: dict = Field(description="System message.")
-
-class StateRequest(BaseModel):
-    session_id: str = Field("default", description="Unique session ID.")
+    observation: dict
+    info: dict
 
 class StateResponse(BaseModel):
-    session_id: str
-    task_id: Optional[int] = Field(description="Currently active Task ID.")
-    task_description: Optional[str]
-    schema_info: str = Field(description="Raw string representation of DB Schema.")
-    attempts: int = Field(description="Number of queries submitted so far on active task.")
-    best_reward: float = Field(description="Highest partial credit achieved.")
-    history: list = Field(description="Log of all queries executed.")
-
-# ── Task Definitions ──────────────────────────────────────────────────────────
+    task_id: int
+    task_description: str
+    schema_info: str
+    attempts: int
+    best_reward: float
+    history: list
 
 TASKS = {
     1: {
-        "description": "Find the total number of completed orders placed in the year 2024. Return a single number with column name: total_orders",
+        "description": (
+            "Find the total number of completed orders placed in the year 2024. "
+            "Return a single number with column name: total_orders"
+        ),
         "difficulty": "easy",
         "hint": "Use COUNT with WHERE filters on status and order_date",
-        "answer_query": "SELECT COUNT(*) AS total_orders FROM orders WHERE status = 'completed' AND order_date LIKE '2024%'",
+        "answer_query": """
+            SELECT COUNT(*) AS total_orders
+            FROM orders
+            WHERE status = 'completed'
+              AND order_date LIKE '2024%'
+        """,
     },
     2: {
-        "description": "Find the top 5 customers by total revenue (sum of total_amount for completed orders only). Return columns: first_name, last_name, total_revenue. Order by total_revenue descending.",
+        "description": (
+            "Find the top 5 customers by total revenue (sum of total_amount for completed orders only). "
+            "Return columns: first_name, last_name, total_revenue. "
+            "Order by total_revenue descending."
+        ),
         "difficulty": "medium",
         "hint": "JOIN orders with customers, GROUP BY customer, filter completed, ORDER and LIMIT",
-        "answer_query": "SELECT c.first_name, c.last_name, ROUND(SUM(o.total_amount), 2) AS total_revenue FROM orders o JOIN customers c ON o.customer_id = c.customer_id WHERE o.status = 'completed' GROUP BY o.customer_id ORDER BY total_revenue DESC LIMIT 5",
+        "answer_query": """
+            SELECT c.first_name, c.last_name,
+                   ROUND(SUM(o.total_amount), 2) AS total_revenue
+            FROM orders o
+            JOIN customers c ON o.customer_id = c.customer_id
+            WHERE o.status = 'completed'
+            GROUP BY o.customer_id
+            ORDER BY total_revenue DESC
+            LIMIT 5
+        """,
     },
     3: {
-        "description": "For each product category, calculate the total revenue (completed orders only) and rank categories by revenue using a window function. Return columns: category, total_revenue, revenue_rank. Order by revenue_rank ascending.",
+        "description": (
+            "For each product category, calculate the total revenue (completed orders only) "
+            "and rank categories by revenue using a window function. "
+            "Return columns: category, total_revenue, revenue_rank. "
+            "Order by revenue_rank ascending."
+        ),
         "difficulty": "hard",
         "hint": "Use SUM with GROUP BY inside a CTE, then apply RANK() OVER (ORDER BY ...) on the result",
-        "answer_query": "WITH category_revenue AS ( SELECT p.category, SUM(o.total_amount) AS total_revenue FROM orders o JOIN products p ON o.product_id = p.product_id WHERE o.status = 'completed' GROUP BY p.category ) SELECT category, total_revenue, RANK() OVER (ORDER BY total_revenue DESC) AS revenue_rank FROM category_revenue ORDER BY revenue_rank ASC",
+        "answer_query": """
+            WITH category_revenue AS (
+                SELECT p.category,
+                       SUM(o.total_amount) AS total_revenue
+                FROM orders o
+                JOIN products p ON o.product_id = p.product_id
+                WHERE o.status = 'completed'
+                GROUP BY p.category
+            )
+            SELECT category,
+                   total_revenue,
+                   RANK() OVER (ORDER BY total_revenue DESC) AS revenue_rank
+            FROM category_revenue
+            ORDER BY revenue_rank ASC
+        """,
     },
     4: {
-        "description": "Find the average price of products in each category, but only for categories that have more than 2 products. Return columns: category, avg_price.",
+        "description": (
+            "Find the average price of products in each category, "
+            "but only for categories that have more than 2 products. "
+            "Return columns: category, avg_price."
+        ),
         "difficulty": "medium",
-        "hint": "Use GROUP BY with HAVING COUNT(...) > 2.",
-        "answer_query": "SELECT category, ROUND(AVG(price), 2) AS avg_price FROM products GROUP BY category HAVING COUNT(product_id) > 2",
+        "hint": "Use GROUP BY with HAVING COUNT(...) > 2",
+        "answer_query": """
+            SELECT category, ROUND(AVG(price), 2) AS avg_price
+            FROM products
+            GROUP BY category
+            HAVING COUNT(product_id) > 2
+        """,
     },
     5: {
-        "description": "Identify customers who have ordered products from both the 'Electronics' and 'Clothing' categories. Return columns: customer_id, first_name.",
+        "description": (
+            "Identify customers who have ordered products from both the Electronics "
+            "and Clothing categories. Return columns: customer_id, first_name."
+        ),
         "difficulty": "hard",
-        "hint": "Use INTERSECT on two queries, or GROUP BY customer HAVING COUNT(DISTINCT category) = 2.",
-        "answer_query": "SELECT DISTINCT c.customer_id, c.first_name FROM customers c JOIN orders o ON c.customer_id = o.customer_id JOIN products p ON o.product_id = p.product_id WHERE p.category = 'Electronics' INTERSECT SELECT DISTINCT c.customer_id, c.first_name FROM customers c JOIN orders o ON c.customer_id = o.customer_id JOIN products p ON o.product_id = p.product_id WHERE p.category = 'Clothing'",
+        "hint": "Use INTERSECT on two queries filtering by category",
+        "answer_query": """
+            SELECT DISTINCT c.customer_id, c.first_name
+            FROM customers c
+            JOIN orders o ON c.customer_id = o.customer_id
+            JOIN products p ON o.product_id = p.product_id
+            WHERE p.category = 'Electronics'
+            INTERSECT
+            SELECT DISTINCT c.customer_id, c.first_name
+            FROM customers c
+            JOIN orders o ON c.customer_id = o.customer_id
+            JOIN products p ON o.product_id = p.product_id
+            WHERE p.category = 'Clothing'
+        """,
     },
 }
 
-# ── Sessions ──────────────────────────────────────────────────────────────────
-
-sessions = {}
-
-def get_session(sid: str):
-    if sid not in sessions:
-        sessions[sid] = {
-            "task_id": None, "task": None, 
-            "expected_rows": None, "expected_columns": None,
-            "attempts": 0, "best_reward": 0.0, "history": []
-        }
-    return sessions[sid]
-
-# ── Database Helpers ──────────────────────────────────────────────────────────
-
-def progress_handler():
-    raise sqlite3.OperationalError("Query execution aborted: Timed out or exceeded instruction limits. Hint: Too complex CROSS JOIN?")
+session = {
+    "task_id": None,
+    "task": None,
+    "expected_rows": None,
+    "expected_columns": None,
+    "attempts": 0,
+    "best_reward": 0.0,
+    "history": [],
+}
 
 def get_connection():
     if not os.path.exists(DB_PATH):
-        raise HTTPException(status_code=500, detail=f"Database not found at {DB_PATH}.")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database not found at {DB_PATH}. Run seed.py first."
+        )
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    # Security feature: Prevent DOS
-    conn.set_progress_handler(progress_handler, 500000)
     return conn
 
 def get_schema_info() -> str:
@@ -142,26 +177,24 @@ def run_query(sql: str) -> tuple[list[dict], list[str]]:
     conn.close()
     return rows, columns
 
-def compute_expected(sid: str):
-    session = get_session(sid)
+def compute_expected():
     task = session["task"]
     rows, columns = run_query(task["answer_query"])
     session["expected_rows"] = rows
     session["expected_columns"] = columns
 
-# ── Reward Function ───────────────────────────────────────────────────────────
-
-def compute_reward(sid: str, agent_rows: list[dict], agent_cols: list[str]) -> tuple[float, dict]:
-    session = get_session(sid)
+def compute_reward(agent_rows: list[dict], agent_cols: list[str]) -> tuple[float, dict]:
     expected_rows = session["expected_rows"]
     expected_cols = session["expected_columns"]
     details = {}
 
-    agent_cols_lower   = [c.lower() for c in agent_cols]
+    agent_cols_lower    = [c.lower() for c in agent_cols]
     expected_cols_lower = [c.lower() for c in expected_cols]
     col_matches = sum(1 for c in expected_cols_lower if c in agent_cols_lower)
     col_score = (col_matches / len(expected_cols_lower)) * 0.30 if expected_cols_lower else 0.0
     details["column_score"] = round(col_score, 3)
+    details["expected_columns"] = expected_cols
+    details["agent_columns"] = agent_cols
 
     expected_count = len(expected_rows)
     agent_count    = len(agent_rows)
@@ -171,14 +204,19 @@ def compute_reward(sid: str, agent_rows: list[dict], agent_cols: list[str]) -> t
         row_ratio = min(agent_count, expected_count) / max(agent_count, expected_count)
         row_score = row_ratio * 0.30
     details["row_score"] = round(row_score, 3)
+    details["expected_row_count"] = expected_count
+    details["agent_row_count"]    = agent_count
 
     if not expected_rows or not agent_rows:
         value_score = 0.0
     else:
         def normalize(v):
-            if v is None: return ""
-            try: return str(round(float(v), 1))
-            except: return str(v).strip().lower()
+            if v is None:
+                return ""
+            try:
+                return str(round(float(v), 1))
+            except (ValueError, TypeError):
+                return str(v).strip().lower()
 
         matched_cells = 0
         total_cells   = len(expected_rows) * len(expected_cols_lower)
@@ -202,82 +240,121 @@ def compute_reward(sid: str, agent_rows: list[dict], agent_cols: list[str]) -> t
     details["total_reward"] = total
     return total, details
 
-# ── Endpoints ─────────────────────────────────────────────────────────────────
-
-@api_app.post("/reset", response_model=ResetResponse, tags=["Agent Environment"], summary="Load Task", description="Initializes the environment with a random task, or resets the current task, returning the description, hints, and database schema.")
+@app.post("/reset", response_model=ResetResponse)
 def reset(req: ResetRequest):
-    if req.task_id not in TASKS: raise HTTPException(status_code=400, detail="Invalid task_id")
-    session = get_session(req.session_id)
-    session["task_id"]    = req.task_id
-    session["task"]       = TASKS[req.task_id]
-    session["attempts"]   = 0
+    if req.task_id not in TASKS:
+        raise HTTPException(status_code=400, detail="task_id must be 1, 2, 3, 4, or 5")
+
+    session["task_id"]     = req.task_id
+    session["task"]        = TASKS[req.task_id]
+    session["attempts"]    = 0
     session["best_reward"] = 0.0
-    session["history"]    = []
-    compute_expected(req.session_id)
+    session["history"]     = []
+
+    compute_expected()
+
+    schema = get_schema_info()
     observation = {
         "task_id":          req.task_id,
         "difficulty":       session["task"]["difficulty"],
         "task_description": session["task"]["description"],
-        "schema":           get_schema_info(),
+        "schema":           schema,
         "hint":             session["task"]["hint"],
     }
-    return ResetResponse(observation=observation, info={"message": f"Task {req.task_id} loaded."})
+    return ResetResponse(
+        observation=observation,
+        info={"message": f"Task {req.task_id} loaded. Use POST /step with your SQL query."}
+    )
 
-@api_app.post("/step", response_model=StepResponse, tags=["Agent Environment"], summary="Execute SQL", description="Executes the valid SQLite `action` against the ecommerce database, evaluating the correctness using a partial 0.0-1.0 Reward function.")
+@app.post("/step", response_model=StepResponse)
 def step(req: StepRequest):
-    session = get_session(req.session_id)
-    if session["task_id"] is None: raise HTTPException(status_code=400, detail="Call /reset first.")
+    if session["task_id"] is None:
+        raise HTTPException(status_code=400, detail="Call /reset first to load a task.")
+
     session["attempts"] += 1
     sql = req.action.strip()
 
     if not re.match(r"^\s*(SELECT|WITH)\b", sql, re.IGNORECASE):
         return StepResponse(
-            observation={"error": "Only SELECT or WITH allowed."}, reward=0.0, done=False,
-            info={"attempt": session["attempts"], "message": "Rejected"}
+            observation={"error": "Only SELECT or WITH (CTE) statements are allowed."},
+            reward=0.0,
+            done=False,
+            info={"attempt": session["attempts"], "message": "Rejected: not a SELECT/WITH query."}
         )
 
     try:
         agent_rows, agent_cols = run_query(sql)
     except Exception as e:
-        session["history"].append({"attempt": session["attempts"], "sql": sql, "reward": 0.0, "error": str(e)})
+        entry = {
+            "attempt": session["attempts"],
+            "sql": sql,
+            "reward": 0.0,
+            "error": str(e),
+        }
+        session["history"].append(entry)
         return StepResponse(
-            observation={"error": str(e), "sql_submitted": sql}, reward=0.0, done=False,
-            info={"attempt": session["attempts"], "message": "SQL Error"}
+            observation={"error": str(e), "sql_submitted": sql},
+            reward=0.0,
+            done=False,
+            info={"attempt": session["attempts"], "message": "SQL execution error."}
         )
 
-    reward, details = compute_reward(req.session_id, agent_rows, agent_cols)
+    reward, details = compute_reward(agent_rows, agent_cols)
     session["best_reward"] = max(session["best_reward"], reward)
     done = reward >= 1.0
-    session["history"].append({"attempt": session["attempts"], "sql": sql, "reward": reward, "details": details})
+
+    entry = {
+        "attempt":   session["attempts"],
+        "sql":       sql,
+        "reward":    reward,
+        "details":   details,
+        "timestamp": datetime.now().isoformat(),
+    }
+    session["history"].append(entry)
 
     observation = {
-        "task_id": session["task_id"], "task_description": session["task"]["description"],
-        "sql_submitted": sql, "result_preview": agent_rows[:5], "result_row_count": len(agent_rows),
+        "task_id":          session["task_id"],
+        "task_description": session["task"]["description"],
+        "sql_submitted":    sql,
+        "result_preview":   agent_rows[:5],
+        "result_row_count": len(agent_rows),
         "reward_breakdown": details,
     }
+
     return StepResponse(
-        observation=observation, reward=reward, done=done,
-        info={"attempt": session["attempts"], "best_reward": session["best_reward"]}
+        observation=observation,
+        reward=reward,
+        done=done,
+        info={
+            "attempt":     session["attempts"],
+            "best_reward": session["best_reward"],
+            "message":     "Perfect score! Task complete." if done else "Keep refining your query.",
+        }
     )
 
-@api_app.get("/state", response_model=StateResponse, tags=["Diagnostics"], summary="Get Current State", description="Returns attempts, rewards, parsed tasks, and historical executed sql queries array.")
-def state(req: StateRequest):
-    session = get_session(req.session_id)
+@app.get("/state", response_model=StateResponse)
+def state():
+    if session["task_id"] is None:
+        raise HTTPException(status_code=400, detail="No active task. Call /reset first.")
+
     return StateResponse(
-        session_id=req.session_id,
         task_id=session["task_id"],
-        task_description=session["task"]["description"] if session["task"] else None,
+        task_description=session["task"]["description"],
         schema_info=get_schema_info(),
         attempts=session["attempts"],
         best_reward=session["best_reward"],
         history=session["history"],
     )
 
-@api_app.get("/")
+@app.get("/")
 def root():
-    return {"message": "API running at /api. Try the UI at root (handled by wrapper)!"}
+    return {
+        "name":    "SQL Analyst OpenEnv",
+        "version": "1.0.0",
+        "tasks":   {k: {"difficulty": v["difficulty"], "description": v["description"]} for k, v in TASKS.items()},
+        "endpoints": ["/reset", "/step", "/state"],
+    }
 
-# ── Server Setup ──────────────────────────────────────────────────────────────
-
-demo = build_ui()
-app = gr.mount_gradio_app(api_app, demo, path="/")
+@app.get("/health")
+def health():
+    return {"status": "ok", "db_exists": os.path.exists(DB_PATH)}
