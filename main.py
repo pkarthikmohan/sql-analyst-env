@@ -133,7 +133,8 @@ TASKS = {
         "description": (
             "Calculate the month-over-month revenue growth percentage for completed orders in 2024. "
             "For each month show total revenue and percentage change vs previous month. "
-            "Return columns: month, total_revenue, prev_revenue, growth_pct. "
+             "Return columns: month, total_revenue, prev_revenue, growth_pct. "
+            "Format month as YYYY-MM (e.g. 2024-01). "
             "Order by month ascending. Round growth_pct to 2 decimal places. "
             "For the first month, prev_revenue and growth_pct should be NULL."
         ),
@@ -141,7 +142,7 @@ TASKS = {
         "hint": "Use LAG() window function to get previous month revenue, then calculate (current - prev) / prev * 100",
         "answer_query": """
             WITH monthly AS (
-                SELECT STRFTIME('%m', order_date) AS month,
+                SELECT STRFTIME('%Y-%m', order_date) AS month,
                        ROUND(SUM(total_amount), 2) AS total_revenue
                 FROM orders
                 WHERE status = 'completed'
