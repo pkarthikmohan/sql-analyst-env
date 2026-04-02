@@ -202,25 +202,19 @@ TASKS = {
         "difficulty": "expert",
         "hint": "Use conditional SUM with CASE WHEN to split spending by half-year, then filter WHERE h2 > h1",
         "answer_query": """
-            WITH half_year AS (
-                SELECT c.customer_id,
-                       c.first_name,
-                       c.last_name,
-                       ROUND(SUM(CASE
-                           WHEN STRFTIME('%m', o.order_date) BETWEEN '01' AND '06'
-                           THEN o.total_amount ELSE 0 END), 2) AS h1_revenue,
-                       ROUND(SUM(CASE
-                           WHEN STRFTIME('%m', o.order_date) BETWEEN '07' AND '12'
-                           THEN o.total_amount ELSE 0 END), 2) AS h2_revenue
-                FROM orders o
-                JOIN customers c ON o.customer_id = c.customer_id
-                WHERE o.status = 'completed'
-                  AND o.order_date LIKE '2024%'
-                GROUP BY c.customer_id
-            )
-            SELECT customer_id, first_name, last_name, h1_revenue, h2_revenue
-            FROM half_year
-            WHERE h2_revenue > h1_revenue
+            SELECT c.customer_id,
+                   c.first_name,
+                   c.last_name,
+                   SUM(CASE WHEN STRFTIME('%m', o.order_date) BETWEEN '01' AND '06'
+                       THEN o.total_amount ELSE 0 END) AS h1_revenue,
+                   SUM(CASE WHEN STRFTIME('%m', o.order_date) BETWEEN '07' AND '12'
+                       THEN o.total_amount ELSE 0 END) AS h2_revenue
+            FROM orders o
+            JOIN customers c ON o.customer_id = c.customer_id
+            WHERE o.status = 'completed'
+              AND o.order_date LIKE '2024%'
+            GROUP BY c.customer_id
+            HAVING h2_revenue > h1_revenue
             ORDER BY h2_revenue DESC
         """,
     },
