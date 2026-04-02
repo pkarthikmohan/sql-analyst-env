@@ -1,15 +1,14 @@
 import sqlite3
 import os
-import json
 import re
 from datetime import datetime
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 DB_PATH = os.path.join("data", "ecommerce.db")
-app = FastAPI(title="SQL Analyst OpenEnv", version="1.0.0")
+app = FastAPI(title="SQL Analyst OpenEnv", version="2.0.0")
 
 class StepRequest(BaseModel):
     action: str
@@ -130,6 +129,101 @@ TASKS = {
             WHERE p.category = 'Clothing'
         """,
     },
+    6: {
+        "description": (
+            "Calculate the month-over-month revenue growth percentage for completed orders in 2024. "
+            "For each month show total revenue and percentage change vs previous month. "
+            "Return columns: month, total_revenue, prev_revenue, growth_pct. "
+            "Order by month ascending. Round growth_pct to 2 decimal places. "
+            "For the first month, prev_revenue and growth_pct should be NULL."
+        ),
+        "difficulty": "expert",
+        "hint": "Use LAG() window function to get previous month revenue, then calculate (current - prev) / prev * 100",
+        "answer_query": """
+            WITH monthly AS (
+                SELECT STRFTIME('%m', order_date) AS month,
+                       ROUND(SUM(total_amount), 2) AS total_revenue
+                FROM orders
+                WHERE status = 'completed'
+                  AND order_date LIKE '2024%'
+                GROUP BY month
+            )
+            SELECT month,
+                   total_revenue,
+                   LAG(total_revenue) OVER (ORDER BY month) AS prev_revenue,
+                   ROUND(
+                       (total_revenue - LAG(total_revenue) OVER (ORDER BY month))
+                       / LAG(total_revenue) OVER (ORDER BY month) * 100,
+                   2) AS growth_pct
+            FROM monthly
+            ORDER BY month ASC
+        """,
+    },
+    7: {
+        "description": (
+            "For each city, find the single best-selling product by total quantity sold "
+            "from completed orders. "
+            "Return columns: city, product_name, total_quantity. "
+            "Order by city ascending. "
+            "If two products tie, return the one with the lower product_id."
+        ),
+        "difficulty": "expert",
+        "hint": "Use RANK() OVER (PARTITION BY city ORDER BY total_quantity DESC, product_id ASC) in a CTE, then filter WHERE rank = 1",
+        "answer_query": """
+            WITH city_product AS (
+                SELECT c.city,
+                       p.product_name,
+                       p.product_id,
+                       SUM(o.quantity) AS total_quantity,
+                       RANK() OVER (
+                           PARTITION BY c.city
+                           ORDER BY SUM(o.quantity) DESC, p.product_id ASC
+                       ) AS rnk
+                FROM orders o
+                JOIN customers c ON o.customer_id = c.customer_id
+                JOIN products  p ON o.product_id  = p.product_id
+                WHERE o.status = 'completed'
+                GROUP BY c.city, p.product_id
+            )
+            SELECT city, product_name, total_quantity
+            FROM city_product
+            WHERE rnk = 1
+            ORDER BY city ASC
+        """,
+    },
+    8: {
+        "description": (
+            "Find customers whose total spending in the second half of 2024 (July-December) "
+            "was strictly greater than their total spending in the first half of 2024 (January-June). "
+            "Only consider completed orders. "
+            "Return columns: customer_id, first_name, last_name, h1_revenue, h2_revenue. "
+            "Order by h2_revenue descending."
+        ),
+        "difficulty": "expert",
+        "hint": "Use conditional SUM with CASE WHEN to split spending by half-year, then filter WHERE h2 > h1",
+        "answer_query": """
+            WITH half_year AS (
+                SELECT c.customer_id,
+                       c.first_name,
+                       c.last_name,
+                       ROUND(SUM(CASE
+                           WHEN STRFTIME('%m', o.order_date) BETWEEN '01' AND '06'
+                           THEN o.total_amount ELSE 0 END), 2) AS h1_revenue,
+                       ROUND(SUM(CASE
+                           WHEN STRFTIME('%m', o.order_date) BETWEEN '07' AND '12'
+                           THEN o.total_amount ELSE 0 END), 2) AS h2_revenue
+                FROM orders o
+                JOIN customers c ON o.customer_id = c.customer_id
+                WHERE o.status = 'completed'
+                  AND o.order_date LIKE '2024%'
+                GROUP BY c.customer_id
+            )
+            SELECT customer_id, first_name, last_name, h1_revenue, h2_revenue
+            FROM half_year
+            WHERE h2_revenue > h1_revenue
+            ORDER BY h2_revenue DESC
+        """,
+    },
 }
 
 session = {
@@ -183,7 +277,7 @@ def compute_expected():
     session["expected_rows"] = rows
     session["expected_columns"] = columns
 
-def compute_reward(agent_rows: list[dict], agent_cols: list[str]) -> tuple[float, dict]:
+def compute_reward(agent_rows, agent_cols):
     expected_rows = session["expected_rows"]
     expected_cols = session["expected_columns"]
     details = {}
@@ -192,9 +286,9 @@ def compute_reward(agent_rows: list[dict], agent_cols: list[str]) -> tuple[float
     expected_cols_lower = [c.lower() for c in expected_cols]
     col_matches = sum(1 for c in expected_cols_lower if c in agent_cols_lower)
     col_score = (col_matches / len(expected_cols_lower)) * 0.30 if expected_cols_lower else 0.0
-    details["column_score"] = round(col_score, 3)
+    details["column_score"]    = round(col_score, 3)
     details["expected_columns"] = expected_cols
-    details["agent_columns"] = agent_cols
+    details["agent_columns"]    = agent_cols
 
     expected_count = len(expected_rows)
     agent_count    = len(agent_rows)
@@ -203,7 +297,7 @@ def compute_reward(agent_rows: list[dict], agent_cols: list[str]) -> tuple[float
     else:
         row_ratio = min(agent_count, expected_count) / max(agent_count, expected_count)
         row_score = row_ratio * 0.30
-    details["row_score"] = round(row_score, 3)
+    details["row_score"]          = round(row_score, 3)
     details["expected_row_count"] = expected_count
     details["agent_row_count"]    = agent_count
 
@@ -220,7 +314,6 @@ def compute_reward(agent_rows: list[dict], agent_cols: list[str]) -> tuple[float
 
         matched_cells = 0
         total_cells   = len(expected_rows) * len(expected_cols_lower)
-
         for exp_row, agt_row in zip(expected_rows, agent_rows):
             for col in expected_cols_lower:
                 exp_val = normalize(exp_row.get(col) or exp_row.get(col.upper()))
@@ -228,37 +321,29 @@ def compute_reward(agent_rows: list[dict], agent_cols: list[str]) -> tuple[float
                 if not agt_val:
                     exp_idx = expected_cols_lower.index(col)
                     if exp_idx < len(agent_cols):
-                        pos_col = agent_cols[exp_idx]
-                        agt_val = normalize(agt_row.get(pos_col))
+                        agt_val = normalize(agt_row.get(agent_cols[exp_idx]))
                 if exp_val == agt_val:
                     matched_cells += 1
-
         value_score = (matched_cells / total_cells) * 0.40 if total_cells > 0 else 0.0
-    details["value_score"] = round(value_score, 3)
-
-    total = round(col_score + row_score + value_score, 3)
-    details["total_reward"] = total
-    return total, details
+    details["value_score"]  = round(value_score, 3)
+    details["total_reward"] = round(col_score + row_score + value_score, 3)
+    return details["total_reward"], details
 
 @app.post("/reset", response_model=ResetResponse)
 def reset(req: ResetRequest):
     if req.task_id not in TASKS:
-        raise HTTPException(status_code=400, detail="task_id must be 1, 2, 3, 4, or 5")
-
+        raise HTTPException(status_code=400, detail="task_id must be 1–8")
     session["task_id"]     = req.task_id
     session["task"]        = TASKS[req.task_id]
     session["attempts"]    = 0
     session["best_reward"] = 0.0
     session["history"]     = []
-
     compute_expected()
-
-    schema = get_schema_info()
     observation = {
         "task_id":          req.task_id,
         "difficulty":       session["task"]["difficulty"],
         "task_description": session["task"]["description"],
-        "schema":           schema,
+        "schema":           get_schema_info(),
         "hint":             session["task"]["hint"],
     }
     return ResetResponse(
@@ -269,66 +354,48 @@ def reset(req: ResetRequest):
 @app.post("/step", response_model=StepResponse)
 def step(req: StepRequest):
     if session["task_id"] is None:
-        raise HTTPException(status_code=400, detail="Call /reset first to load a task.")
-
+        raise HTTPException(status_code=400, detail="Call /reset first.")
     session["attempts"] += 1
     sql = req.action.strip()
 
     if not re.match(r"^\s*(SELECT|WITH)\b", sql, re.IGNORECASE):
         return StepResponse(
-            observation={"error": "Only SELECT or WITH (CTE) statements are allowed."},
-            reward=0.0,
-            done=False,
-            info={"attempt": session["attempts"], "message": "Rejected: not a SELECT/WITH query."}
+            observation={"error": "Only SELECT or WITH allowed."},
+            reward=0.0, done=False,
+            info={"attempt": session["attempts"], "message": "Rejected."}
         )
 
     try:
         agent_rows, agent_cols = run_query(sql)
     except Exception as e:
-        entry = {
-            "attempt": session["attempts"],
-            "sql": sql,
-            "reward": 0.0,
-            "error": str(e),
-        }
-        session["history"].append(entry)
+        session["history"].append({"attempt": session["attempts"], "sql": sql, "reward": 0.0, "error": str(e)})
         return StepResponse(
-            observation={"error": str(e), "sql_submitted": sql},
-            reward=0.0,
-            done=False,
-            info={"attempt": session["attempts"], "message": "SQL execution error."}
+            observation={"error": str(e)}, reward=0.0, done=False,
+            info={"attempt": session["attempts"], "message": "SQL error."}
         )
 
     reward, details = compute_reward(agent_rows, agent_cols)
     session["best_reward"] = max(session["best_reward"], reward)
     done = reward >= 1.0
-
-    entry = {
-        "attempt":   session["attempts"],
-        "sql":       sql,
-        "reward":    reward,
-        "details":   details,
+    session["history"].append({
+        "attempt": session["attempts"], "sql": sql,
+        "reward": reward, "details": details,
         "timestamp": datetime.now().isoformat(),
-    }
-    session["history"].append(entry)
-
-    observation = {
-        "task_id":          session["task_id"],
-        "task_description": session["task"]["description"],
-        "sql_submitted":    sql,
-        "result_preview":   agent_rows[:5],
-        "result_row_count": len(agent_rows),
-        "reward_breakdown": details,
-    }
+    })
 
     return StepResponse(
-        observation=observation,
-        reward=reward,
-        done=done,
+        observation={
+            "task_id":          session["task_id"],
+            "sql_submitted":    sql,
+            "result_preview":   agent_rows[:5],
+            "result_row_count": len(agent_rows),
+            "reward_breakdown": details,
+        },
+        reward=reward, done=done,
         info={
             "attempt":     session["attempts"],
             "best_reward": session["best_reward"],
-            "message":     "Perfect score! Task complete." if done else "Keep refining your query.",
+            "message":     "Perfect score!" if done else "Keep refining.",
         }
     )
 
@@ -336,7 +403,6 @@ def step(req: StepRequest):
 def state():
     if session["task_id"] is None:
         raise HTTPException(status_code=400, detail="No active task. Call /reset first.")
-
     return StateResponse(
         task_id=session["task_id"],
         task_description=session["task"]["description"],
@@ -350,9 +416,9 @@ def state():
 def root():
     return {
         "name":    "SQL Analyst OpenEnv",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "tasks":   {k: {"difficulty": v["difficulty"], "description": v["description"]} for k, v in TASKS.items()},
-        "endpoints": ["/reset", "/step", "/state"],
+        "endpoints": ["/reset", "/step", "/state", "/health"],
     }
 
 @app.get("/health")

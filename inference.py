@@ -7,20 +7,19 @@ import json
 import time
 import requests
 from openai import OpenAI
-from dotenv import load_dotenv
-load_dotenv()
 
 ENV_BASE_URL = "https://p-karthik-mohan-sql-analyst-env.hf.space"
 MAX_ATTEMPTS = 5
-TASK_IDS     = [1, 2, 3, 4, 5]
+TASK_IDS     = [1, 2, 3, 4, 5, 6, 7, 8]
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "llama-3.1-8b-instant")
-HF_TOKEN     = os.environ.get("HF_TOKEN",     "")
+HF_TOKEN     = os.environ.get("HF_TOKEN","")
 
 client = OpenAI(
     base_url=API_BASE_URL,
-    api_key=HF_TOKEN if HF_TOKEN else "no-key-needed",
+   
+    api_key="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",
 )
 
 def env_reset(task_id: int) -> dict:
