@@ -1,3 +1,97 @@
+import os
+import re
+
+# 1. Update requirements.txt
+req_txt = "requirements.txt"
+with open(req_txt, "r") as f:
+    reqs = f.read()
+if "gradio" not in reqs:
+    with open(req_txt, "a") as f:
+        f.write("\ngradio==4.44.0\npandas\n")
+
+# 2. Create the Gradio UI file (ui.py)
+ui_code = """
+import gradio as gr
+import requests
+import pandas as pd
+import json
+import uuid
+
+ENV_BASE_URL = "http://127.0.0.1:7860"
+
+def new_session():
+    return str(uuid.uuid4())
+
+def load_task(task_id, sid):
+    try:
+        task_num = int(task_id.split()[1])
+        r = requests.post(f"{ENV_BASE_URL}/api/reset", json={"task_id": task_num, "session_id": sid})
+        if r.status_code != 200:
+            return f"Error: {r.text}", "", "", pd.DataFrame(), f"Error loading task {task_num}"
+            
+        data = r.json()
+        obs = data["observation"]
+        return obs["task_description"], obs["schema"], obs["hint"], pd.DataFrame(), "Task loaded. Write SQL below."
+    except Exception as e:
+        return str(e), "", "", pd.DataFrame(), "Error loading task"
+
+def run_sql(sql, sid):
+    if not sql.strip():
+        return pd.DataFrame(), "Please enter a SQL query.", "Error"
+    try:
+        r = requests.post(f"{ENV_BASE_URL}/api/step", json={"action": sql, "session_id": sid})
+        data = r.json()
+        obs = data.get("observation", {})
+        reward = data.get("reward", 0.0)
+        done = data.get("done", False)
+        
+        df = pd.DataFrame(obs.get("result_preview", []))
+        breakdown = obs.get("reward_breakdown", {})
+        
+        feedback = f"🎯 Reward: {reward:.2f} / 1.0\\n"
+        if breakdown:
+            feedback += f"Columns: {breakdown.get('column_score',0):.2f}, Rows: {breakdown.get('row_score',0):.2f}, Values: {breakdown.get('value_score',0):.2f}"
+        if "error" in obs:
+            feedback += f"\\n\\n⚠️ Error: {obs['error']}"
+        
+        return df, feedback, "✅ SOLVED!" if done else "Keep trying!"
+    except Exception as e:
+         return pd.DataFrame(), str(e), "Error"
+
+def build_ui():
+    with gr.Blocks(theme=gr.themes.Soft(primary_hue="indigo")) as demo:
+        gr.Markdown("# 📊 SQL Analyst OpenEnv - Hackathon Edition")
+        gr.Markdown("Test Human or AI performance on realistic E-Commerce SQL Data tasks. [API served at `/api`]")
+        
+        sid = gr.State(new_session)
+        
+        with gr.Row():
+            with gr.Column(scale=1):
+                task_dropdown = gr.Dropdown(choices=["Task 1 (Easy)", "Task 2 (Medium)", "Task 3 (Hard)", "Task 4 (Medium)", "Task 5 (Hard)"], value="Task 1 (Easy)", label="Select Task")
+                btn_load = gr.Button("🔄 Load Task")
+                
+                desc = gr.Textbox(label="Business Question", interactive=False, lines=2)
+                hint = gr.Textbox(label="Hint", interactive=False)
+                schema = gr.Code(label="Database Schema", language="sql", interactive=False)
+            
+            with gr.Column(scale=2):
+                sql_input = gr.Code(label="SQL Editor", language="sql", lines=10)
+                btn_run = gr.Button("🚀 Run SQL", variant="primary")
+                
+                status_out = gr.Markdown("Ready.")
+                feedback_out = gr.Textbox(label="Feedback & Score", interactive=False)
+                grid_out = gr.Dataframe(label="Result Preview (First 5 Rows)")
+
+        btn_load.click(load_task, inputs=[task_dropdown, sid], outputs=[desc, schema, hint, grid_out, feedback_out])
+        btn_run.click(run_sql, inputs=[sql_input, sid], outputs=[grid_out, feedback_out, status_out])
+        
+    return demo
+"""
+with open("ui.py", "w", encoding="utf-8") as f:
+    f.write(ui_code.strip() + "\n")
+
+# 3. Rewrite main.py (adding concurrency fixes, security, and mounting gradio)
+main_py_code = """
 import sqlite3
 import os
 import json
@@ -14,46 +108,39 @@ from ui import build_ui
 # ── Config ────────────────────────────────────────────────────────────────────
 DB_PATH = os.path.join("data", "ecommerce.db")
 # Under /api for direct agent access, root for UI
-api_app = FastAPI(
-    title="SQL Analyst OpenEnv API", 
-    version="1.1.0", 
-    docs_url="/docs", 
-    redoc_url="/redoc",
-    description="A real-world benchmark environment for AI agents writing SQL. Use `/reset` to select a task, `/step` to submit a query and receive partial-credit feedback, and `/state` to track history."
-)
-
+api_app = FastAPI(title="SQL Analyst OpenEnv API", version="1.1.0")
 
 # ── Pydantic Models ───────────────────────────────────────────────────────────
 
 class StepRequest(BaseModel):
-    session_id: str = Field("default", description="Unique session ID to prevent collisions.")
-    action: str = Field(..., description="A valid SQLite SELECT or WITH statement.", examples=["SELECT COUNT(*) AS total_orders FROM orders;"])
+    session_id: str = "default"
+    action: str
 
 class StepResponse(BaseModel):
-    observation: dict = Field(description="Contains result_preview (first 5 rows), reward_breakdown, and any sql execution errors.")
-    reward: float = Field(description="Partial credit reward from 0.0 (wrong) to 1.0 (perfect).")
-    done: bool = Field(description="True if reward == 1.0 (Task solved).")
-    info: dict = Field(description="System message and attempt count.")
+    observation: dict
+    reward: float
+    done: bool
+    info: dict
 
 class ResetRequest(BaseModel):
-    task_id: int = Field(..., description="ID of the task to load (1 to 5).", examples=[1])
-    session_id: str = Field("default", description="Unique session ID.")
+    task_id: int
+    session_id: str = "default"
 
 class ResetResponse(BaseModel):
-    observation: dict = Field(description="Contains task_description, schema, and hint to be passed to the agent.")
-    info: dict = Field(description="System message.")
+    observation: dict
+    info: dict
 
 class StateRequest(BaseModel):
-    session_id: str = Field("default", description="Unique session ID.")
+    session_id: str = "default"
 
 class StateResponse(BaseModel):
     session_id: str
-    task_id: Optional[int] = Field(description="Currently active Task ID.")
+    task_id: Optional[int]
     task_description: Optional[str]
-    schema_info: str = Field(description="Raw string representation of DB Schema.")
-    attempts: int = Field(description="Number of queries submitted so far on active task.")
-    best_reward: float = Field(description="Highest partial credit achieved.")
-    history: list = Field(description="Log of all queries executed.")
+    schema_info: str
+    attempts: int
+    best_reward: float
+    history: list
 
 # ── Task Definitions ──────────────────────────────────────────────────────────
 
@@ -131,7 +218,7 @@ def get_schema_info() -> str:
         count = cur.fetchone()["n"]
         schema_parts.append(f"  {table} ({col_defs})  -- {count} rows")
     conn.close()
-    return "Tables:\n" + "\n".join(schema_parts)
+    return "Tables:\\n" + "\\n".join(schema_parts)
 
 def run_query(sql: str) -> tuple[list[dict], list[str]]:
     conn = get_connection()
@@ -204,7 +291,7 @@ def compute_reward(sid: str, agent_rows: list[dict], agent_cols: list[str]) -> t
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@api_app.post("/reset", response_model=ResetResponse, tags=["Agent Environment"], summary="Load Task", description="Initializes the environment with a random task, or resets the current task, returning the description, hints, and database schema.")
+@api_app.post("/reset", response_model=ResetResponse)
 def reset(req: ResetRequest):
     if req.task_id not in TASKS: raise HTTPException(status_code=400, detail="Invalid task_id")
     session = get_session(req.session_id)
@@ -223,14 +310,14 @@ def reset(req: ResetRequest):
     }
     return ResetResponse(observation=observation, info={"message": f"Task {req.task_id} loaded."})
 
-@api_app.post("/step", response_model=StepResponse, tags=["Agent Environment"], summary="Execute SQL", description="Executes the valid SQLite `action` against the ecommerce database, evaluating the correctness using a partial 0.0-1.0 Reward function.")
+@api_app.post("/step", response_model=StepResponse)
 def step(req: StepRequest):
     session = get_session(req.session_id)
     if session["task_id"] is None: raise HTTPException(status_code=400, detail="Call /reset first.")
     session["attempts"] += 1
     sql = req.action.strip()
 
-    if not re.match(r"^\s*(SELECT|WITH)\b", sql, re.IGNORECASE):
+    if not re.match(r"^\\s*(SELECT|WITH)\\b", sql, re.IGNORECASE):
         return StepResponse(
             observation={"error": "Only SELECT or WITH allowed."}, reward=0.0, done=False,
             info={"attempt": session["attempts"], "message": "Rejected"}
@@ -260,7 +347,7 @@ def step(req: StepRequest):
         info={"attempt": session["attempts"], "best_reward": session["best_reward"]}
     )
 
-@api_app.get("/state", response_model=StateResponse, tags=["Diagnostics"], summary="Get Current State", description="Returns attempts, rewards, parsed tasks, and historical executed sql queries array.")
+@api_app.get("/state", response_model=StateResponse)
 def state(req: StateRequest):
     session = get_session(req.session_id)
     return StateResponse(
@@ -281,3 +368,31 @@ def root():
 
 demo = build_ui()
 app = gr.mount_gradio_app(api_app, demo, path="/")
+"""
+with open("main.py", "w", encoding="utf-8") as f:
+    f.write(main_py_code.strip() + "\n")
+
+# 4. Modify inference.py to use session IDs
+with open("inference.py", "r", encoding="utf-8") as f:
+    inf = f.read()
+
+inf = inf.replace('ENV_BASE_URL = "http://127.0.0.1:7860"', 'ENV_BASE_URL = "http://127.0.0.1:7860/api"')
+inf = inf.replace("TASK_IDS     = [1, 2, 3]", "TASK_IDS     = [1, 2, 3, 4, 5]")
+inf = inf.replace('def env_reset(task_id: int) -> dict:', 'def env_reset(task_id: int, session_id: str) -> dict:')
+inf = inf.replace('json={"task_id": task_id}', 'json={"task_id": task_id, "session_id": session_id}')
+
+inf = inf.replace('def env_step(sql: str) -> dict:', 'def env_step(sql: str, session_id: str) -> dict:')
+inf = inf.replace('json={"action": sql}', 'json={"action": sql, "session_id": session_id}')
+
+inf = inf.replace("reset_resp = env_reset(task_id)", 'session_id = f"baseline_{task_id}"\n    reset_resp = env_reset(task_id, session_id)')
+inf = inf.replace("step_resp = env_step(sql)", 'step_resp = env_step(sql, session_id)')
+
+inf = inf.replace('r = requests.get(f"{ENV_BASE_URL}/state")', 'r = requests.get(f"{ENV_BASE_URL}/state", json={"session_id": "baseline_1"})')
+
+# health check fix for inference wait_for_server
+inf = re.sub(r'requests\.get\(f"\{ENV_BASE_URL\}/health", timeout=3\)', 'requests.get(f"{ENV_BASE_URL}/", timeout=3)', inf)
+
+with open("inference.py", "w", encoding="utf-8") as f:
+    f.write(inf)
+
+print("Done generating make_awesome.")
