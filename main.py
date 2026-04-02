@@ -206,12 +206,12 @@ TASKS = {
                 SELECT c.customer_id,
                        c.first_name,
                        c.last_name,
-                       SUM(CASE
+                       ROUND(SUM(CASE
                            WHEN STRFTIME('%m', o.order_date) BETWEEN '01' AND '06'
-                           THEN o.total_amount ELSE 0 END) AS h1_revenue,
-                       SUM(CASE
+                           THEN o.total_amount ELSE 0 END), 2) AS h1_revenue,
+                       ROUND(SUM(CASE
                            WHEN STRFTIME('%m', o.order_date) BETWEEN '07' AND '12'
-                           THEN o.total_amount ELSE 0 END) AS h2_revenue
+                           THEN o.total_amount ELSE 0 END), 2) AS h2_revenue
                 FROM orders o
                 JOIN customers c ON o.customer_id = c.customer_id
                 WHERE o.status = 'completed'
@@ -311,7 +311,7 @@ def compute_reward(agent_rows, agent_cols):
                 f = round(float(v), 2)
                 if f == int(f):
                     return str(int(f))
-                return str(round(f, 1))
+                return str(f)
             except (ValueError, TypeError):
                 return str(v).strip().lower()
 
