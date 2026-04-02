@@ -18,7 +18,7 @@ pinned: false
 
 ## What Is This?
 
-This environment simulates the daily work of a **data analyst at an e-commerce company**.
+-This environment simulates the daily work of a **data analyst at an e-commerce company**.
 The AI agent receives a natural language business question, explores the database schema,
 and must produce a correct SQL query to answer it.
 
