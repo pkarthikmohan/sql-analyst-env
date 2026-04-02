@@ -19,7 +19,7 @@ HF_TOKEN     = os.environ.get("HF_TOKEN","")
 client = OpenAI(
     base_url=API_BASE_URL,
    
-    api_key="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",
+    api_key=HF_TOKEN if HF_TOKEN else "no-key-needed",
 )
 
 def env_reset(task_id: int) -> dict:
