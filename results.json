@@ -5,7 +5,7 @@
       "difficulty": "easy",
       "best_reward": 1.0,
       "attempts": 1,
-      "final_sql": "SELECT COUNT(*) AS total_orders \nFROM orders \nWHERE status = 'completed' AND STRFTIME('%Y', order_date) = '2024'",
+      "final_sql": "SELECT COUNT(*) AS total_orders\nFROM orders\nWHERE STRFTIME('%Y', order_date) = '2024' AND status = 'completed'",
       "solved": true
     },
     {
@@ -23,8 +23,48 @@
       "attempts": 1,
       "final_sql": "WITH category_revenue AS (\n  SELECT p.category, SUM(o.total_amount) AS total_revenue\n  FROM orders o\n  JOIN products p ON o.product_id = p.product_id\n  WHERE o.status = 'completed'\n  GROUP BY p.category\n)\nSELECT category, total_revenue, RANK() OVER (ORDER BY total_revenue DESC) AS revenue_rank\nFROM category_revenue\nORDER BY revenue_rank ASC;",
       "solved": true
+    },
+    {
+      "task_id": 4,
+      "difficulty": "medium",
+      "best_reward": 1.0,
+      "attempts": 1,
+      "final_sql": "SELECT \n  p.category, \n  AVG(p.price) AS avg_price\nFROM \n  products p\nGROUP BY \n  p.category\nHAVING \n  COUNT(p.product_id) > 2",
+      "solved": true
+    },
+    {
+      "task_id": 5,
+      "difficulty": "hard",
+      "best_reward": 1.0,
+      "attempts": 1,
+      "final_sql": "SELECT customer_id, first_name \nFROM customers \nWHERE customer_id IN (\n  SELECT customer_id \n  FROM orders \n  WHERE product_id IN (\n    SELECT product_id \n    FROM products \n    WHERE category = 'Electronics'\n  )\n  INTERSECT\n  SELECT customer_id \n  FROM orders \n  WHERE product_id IN (\n    SELECT product_id \n    FROM products \n    WHERE category = 'Clothing'\n  )\n);",
+      "solved": true
+    },
+    {
+      "task_id": 6,
+      "difficulty": "expert",
+      "best_reward": 0.9,
+      "attempts": 5,
+      "final_sql": "SELECT \n  STRFTIME('%Y-%m', order_date) AS month,\n  SUM(total_amount) AS total_revenue,\n  LAG(SUM(total_amount)) OVER (ORDER BY STRFTIME('%Y-%m', order_date)) AS prev_revenue,\n  ROUND(COALESCE((SUM(total_amount) - LAG(SUM(total_amount)) OVER (ORDER BY STRFTIME('%Y-%m', order_date))) / \n                  NULLIF(LAG(SUM(total_amount)) OVER (ORDER BY STRFTIME('%Y-%m', order_date)), 0) * 100, NULL), 2) AS growth_pct\nFROM orders\nWHERE STRFTIME('%Y', order_date) = '2024' AND status = 'completed'\nGROUP BY STRFTIME('%Y-%m', order_date)\nORDER BY STRFTIME('%Y-%m', order_date)",
+      "solved": false
+    },
+    {
+      "task_id": 7,
+      "difficulty": "expert",
+      "best_reward": 1.0,
+      "attempts": 1,
+      "final_sql": "WITH ranked_orders AS (\n  SELECT \n    c.city,\n    p.product_name,\n    SUM(o.quantity) AS total_quantity,\n    RANK() OVER (PARTITION BY c.city ORDER BY SUM(o.quantity) DESC, p.product_id ASC) AS rank\n  FROM \n    customers c\n  JOIN \n    orders o ON c.customer_id = o.customer_id\n  JOIN \n    products p ON o.product_id = p.product_id\n  WHERE \n    o.status = 'completed'\n  GROUP BY \n    c.city, p.product_name, p.product_id\n)\nSELECT \n  city,\n  product_name,\n  total_quantity\nFROM \n  ranked_orders\nWHERE \n  rank = 1\nORDER BY \n  city ASC;",
+      "solved": true
+    },
+    {
+      "task_id": 8,
+      "difficulty": "expert",
+      "best_reward": 0.98,
+      "attempts": 5,
+      "final_sql": "SELECT \n  c.customer_id, \n  c.first_name, \n  c.last_name, \n  SUM(CASE WHEN STRFTIME('%Y', o.order_date) = 2024 AND STRFTIME('%m', o.order_date) BETWEEN '01' AND '06' THEN o.total_amount ELSE 0 END) AS h1_revenue,\n  SUM(CASE WHEN STRFTIME('%Y', o.order_date) = 2024 AND STRFTIME('%m', o.order_date) BETWEEN '07' AND '12' THEN o.total_amount ELSE 0 END) AS h2_revenue\nFROM \n  customers c\n  JOIN orders o ON c.customer_id = o.customer_id\nWHERE \n  o.status = 'completed'\nGROUP BY \n  c.customer_id, c.first_name, c.last_name\nHAVING \n  h2_revenue > h1_revenue\nORDER BY \n  h2_revenue DESC",
+      "solved": false
     }
   ],
-  "avg_score": 1.0,
-  "tasks_solved": 3
+  "avg_score": 0.985,
+  "tasks_solved": 6
 }
