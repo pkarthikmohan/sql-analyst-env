@@ -1,6 +1,12 @@
 """
 inference.py — Baseline AI agent for SQL Analyst OpenEnv
+---------------------------------------------------------
+Stdout format (mandatory):
+  [START] task=<task_name> env=<benchmark> model=<model_name>
+  [STEP]  step=<n> action=<sql> reward=<0.00> done=<true|false> error=<msg|null>
+  [END]   success=<true|false> steps=<n> score=<0.000> rewards=<r1,r2,...>
 """
+
 import os
 import sys
 import json
@@ -8,48 +14,68 @@ import time
 import requests
 from openai import OpenAI
 from dotenv import load_dotenv
+
 load_dotenv()
 
 ENV_BASE_URL = "https://p-karthik-mohan-sql-analyst-env.hf.space"
 MAX_ATTEMPTS = 5
 TASK_IDS     = [1, 2, 3, 4, 5, 6, 7, 8]
+BENCHMARK    = "sql-analyst-env"
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "llama-3.1-8b-instant")
-HF_TOKEN     = os.environ.get("HF_TOKEN","")
+HF_TOKEN     = os.environ.get("HF_TOKEN",     "")
 
 client = OpenAI(
     base_url=API_BASE_URL,
     api_key=HF_TOKEN if HF_TOKEN else "no-key-needed",
-    
 )
 
-def env_reset(task_id: int) -> dict:
+# ── Mandatory stdout log functions ────────────────────────────────────────────
+
+def log_start(task, env, model):
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+def log_step(step, action, reward, done, error=None):
+    action_clean = action.replace("\n", " ").strip()[:120]
+    error_val    = error if error else "null"
+    done_val     = str(done).lower()
+    print(f"[STEP] step={step} action={action_clean} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
+
+def log_end(success, steps, score, rewards):
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
+
+# ── Environment helpers ───────────────────────────────────────────────────────
+
+def env_reset(task_id):
     r = requests.post(f"{ENV_BASE_URL}/reset", json={"task_id": task_id})
     r.raise_for_status()
     return r.json()
 
-def env_step(sql: str) -> dict:
+def env_step(sql):
     r = requests.post(f"{ENV_BASE_URL}/step", json={"action": sql})
     r.raise_for_status()
     return r.json()
 
-def wait_for_server(retries: int = 10, delay: float = 2.0):
-    print("Waiting for environment server...")
+def wait_for_server(retries=10, delay=2.0):
+    print("Waiting for environment server...", flush=True)
     for i in range(retries):
         try:
             r = requests.get(f"{ENV_BASE_URL}/health", timeout=3)
             if r.status_code == 200:
-                print("Server is ready.\n")
+                print("Server is ready.\n", flush=True)
                 return
         except requests.exceptions.ConnectionError:
             pass
-        print(f"  Not ready yet... ({i+1}/{retries})")
+        print(f"  Not ready yet... ({i+1}/{retries})", flush=True)
         time.sleep(delay)
-    print("ERROR: Server did not start in time.")
+    print("ERROR: Server did not start in time.", flush=True)
     sys.exit(1)
 
-def build_system_prompt() -> str:
+# ── LLM ───────────────────────────────────────────────────────────────────────
+
+def build_system_prompt():
     return """You are an expert SQL analyst. Your job is to write correct SQLite queries.
 
 Rules:
@@ -57,7 +83,8 @@ Rules:
 - Always match the exact column names specified in the task.
 - Always filter WHERE status = 'completed' unless told otherwise.
 - Use STRFTIME('%Y', order_date) for year filtering in SQLite.
-- RANK() OVER (...) is supported in SQLite 3.25+.
+- Use STRFTIME('%Y-%m', order_date) for year-month formatting.
+- RANK() OVER (...) and LAG() OVER (...) are supported in SQLite 3.25+.
 - Return ONLY the raw SQL query — no explanation, no markdown, no backticks.
 - If a previous attempt scored less than 1.0, study the feedback and fix the query.
 """
@@ -91,9 +118,7 @@ Attempt number: {attempt}
 def ask_llm(task_description, schema, hint, attempt, previous_attempts):
     messages = [
         {"role": "system", "content": build_system_prompt()},
-        {"role": "user",   "content": build_user_prompt(
-            task_description, schema, hint, attempt, previous_attempts
-        )},
+        {"role": "user",   "content": build_user_prompt(task_description, schema, hint, attempt, previous_attempts)},
     ]
     response = client.chat.completions.create(
         model=MODEL_NAME,
@@ -104,17 +129,13 @@ def ask_llm(task_description, schema, hint, attempt, previous_attempts):
     sql = response.choices[0].message.content.strip()
     if sql.startswith("```"):
         lines = sql.split("\n")
-        sql = "\n".join(
-            line for line in lines
-            if not line.strip().startswith("```")
-        ).strip()
+        sql = "\n".join(line for line in lines if not line.strip().startswith("```")).strip()
     return sql
 
-def solve_task(task_id: int) -> dict:
-    print(f"\n{'='*60}")
-    print(f"TASK {task_id}")
-    print('='*60)
+# ── Task solver ───────────────────────────────────────────────────────────────
 
+def solve_task(task_id):
+    task_name  = f"sql-task-{task_id}"
     reset_resp = env_reset(task_id)
     obs        = reset_resp["observation"]
     task_desc  = obs["task_description"]
@@ -122,30 +143,54 @@ def solve_task(task_id: int) -> dict:
     hint       = obs["hint"]
     difficulty = obs["difficulty"]
 
-    print(f"Difficulty : {difficulty.upper()}")
-    print(f"Task       : {task_desc}\n")
+    print(f"\n{'='*60}", flush=True)
+    print(f"TASK {task_id} ({difficulty.upper()})", flush=True)
+    print(f"Task: {task_desc}\n", flush=True)
+
+    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
 
     previous_attempts = []
-    best_reward = 0.0
-    final_sql   = ""
+    all_rewards       = []
+    best_reward       = 0.0
+    final_sql         = ""
+    steps_taken       = 0
+    success           = False
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
-        print(f"  Attempt {attempt}/{MAX_ATTEMPTS} — asking LLM...")
-        sql = ask_llm(task_desc, schema, hint, attempt, previous_attempts)
-        print(f"  SQL: {sql[:120]}{'...' if len(sql) > 120 else ''}")
+        print(f"  Attempt {attempt}/{MAX_ATTEMPTS} — asking LLM...", flush=True)
+        error = None
+        sql   = ""
 
-        step_resp = env_step(sql)
-        reward    = step_resp["reward"]
-        done      = step_resp["done"]
-        details   = step_resp["observation"].get("reward_breakdown", {})
+        try:
+            sql = ask_llm(task_desc, schema, hint, attempt, previous_attempts)
+            print(f"  SQL: {sql[:120]}{'...' if len(sql) > 120 else ''}", flush=True)
+        except Exception as e:
+            error = str(e)
+            log_step(step=attempt, action="", reward=0.0, done=False, error=error)
+            all_rewards.append(0.0)
+            steps_taken = attempt
+            continue
 
-        print(f"  Reward: {reward:.3f}  "
-              f"(cols={details.get('column_score',0):.2f}  "
-              f"rows={details.get('row_score',0):.2f}  "
-              f"vals={details.get('value_score',0):.2f})")
+        try:
+            step_resp = env_step(sql)
+            reward    = step_resp["reward"]
+            done      = step_resp["done"]
+            details   = step_resp["observation"].get("reward_breakdown", {})
+        except Exception as e:
+            error = str(e)
+            log_step(step=attempt, action=sql, reward=0.0, done=False, error=error)
+            all_rewards.append(0.0)
+            steps_taken = attempt
+            continue
 
+        all_rewards.append(reward)
+        steps_taken = attempt
         best_reward = max(best_reward, reward)
         final_sql   = sql
+
+        print(f"  Reward: {reward:.3f}  (cols={details.get('column_score',0):.2f}  rows={details.get('row_score',0):.2f}  vals={details.get('value_score',0):.2f})", flush=True)
+
+        log_step(step=attempt, action=sql, reward=reward, done=done, error=error)
 
         previous_attempts.append({
             "attempt": attempt,
@@ -155,57 +200,61 @@ def solve_task(task_id: int) -> dict:
         })
 
         if done:
-            print(f"  PERFECT SCORE on attempt {attempt}!")
+            print(f"  PERFECT SCORE on attempt {attempt}!", flush=True)
+            success = True
             break
         elif reward >= 0.8:
-            print(f"  Score is close ({reward:.3f}). Trying to improve...")
+            print(f"  Score is close ({reward:.3f}). Trying to improve...", flush=True)
         else:
-            print(f"  Score is low ({reward:.3f}). Refining query...")
+            print(f"  Score is low ({reward:.3f}). Refining query...", flush=True)
+
+    log_end(success=success, steps=steps_taken, score=best_reward, rewards=all_rewards)
 
     return {
         "task_id":     task_id,
+        "task_name":   task_name,
         "difficulty":  difficulty,
         "best_reward": best_reward,
-        "attempts":    len(previous_attempts),
+        "attempts":    steps_taken,
         "final_sql":   final_sql,
-        "solved":      best_reward >= 1.0,
+        "solved":      success,
     }
 
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main():
-    print("SQL Analyst OpenEnv — Baseline Inference Agent")
-    print(f"Model      : {MODEL_NAME}")
-    print(f"API Base   : {API_BASE_URL}")
-    print(f"Env Server : {ENV_BASE_URL}")
+    print("SQL Analyst OpenEnv — Baseline Inference Agent", flush=True)
+    print(f"Model      : {MODEL_NAME}", flush=True)
+    print(f"API Base   : {API_BASE_URL}", flush=True)
+    print(f"Env Server : {ENV_BASE_URL}", flush=True)
 
     wait_for_server()
 
-    results = []
+    results     = []
+    total_score = 0.0
+
     for task_id in TASK_IDS:
         result = solve_task(task_id)
         results.append(result)
+        total_score += result["best_reward"]
 
-    print(f"\n{'='*60}")
-    print("FINAL RESULTS")
-    print('='*60)
+    print(f"\n{'='*60}", flush=True)
+    print("FINAL RESULTS", flush=True)
+    print('='*60, flush=True)
 
-    total_score = 0.0
     for r in results:
         status = "SOLVED" if r["solved"] else f"best={r['best_reward']:.3f}"
-        print(f"  Task {r['task_id']} ({r['difficulty']:6s})  {status}  "
-              f"in {r['attempts']} attempt(s)")
-        total_score += r["best_reward"]
+        print(f"  Task {r['task_id']} ({r['difficulty']:6s})  {status}  in {r['attempts']} attempt(s)", flush=True)
 
-    avg_score = total_score / len(results)
-    print(f"\n  Average reward : {avg_score:.3f} / 1.000")
-    print(f"  Tasks solved   : {sum(1 for r in results if r['solved'])} / {len(results)}")
+    avg_score    = total_score / len(results)
+    tasks_solved = sum(1 for r in results if r["solved"])
+
+    print(f"\n  Average reward : {avg_score:.3f} / 1.000", flush=True)
+    print(f"  Tasks solved   : {tasks_solved} / {len(results)}", flush=True)
 
     with open("results.json", "w") as f:
-        json.dump({
-            "results":      results,
-            "avg_score":    round(avg_score, 3),
-            "tasks_solved": sum(1 for r in results if r["solved"]),
-        }, f, indent=2)
-    print(f"\n  Results saved to results.json")
+        json.dump({"results": results, "avg_score": round(avg_score, 3), "tasks_solved": tasks_solved}, f, indent=2)
+    print(f"\n  Results saved to results.json", flush=True)
 
 if __name__ == "__main__":
     main()
