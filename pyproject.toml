@@ -1,0 +1,25 @@
+[project]
+name = "sql-analyst-env"
+version = "2.0.0"
+description = "A real-world OpenEnv environment where an AI agent writes SQL queries against an e-commerce database"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn==0.30.6",
+    "pydantic==2.9.2",
+    "requests==2.32.3",
+    "openai==1.51.0",
+    "pyyaml==6.0.2",
+    "python-dotenv",
+    "openenv-core>=0.2.0",
+]
+
+[project.urls]
+Homepage = "https://huggingface.co/spaces/P-Karthik-Mohan/sql-analyst-env"
+
+[project.scripts]
+server = "server.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
