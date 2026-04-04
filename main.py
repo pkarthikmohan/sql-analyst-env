@@ -20,7 +20,7 @@ class StepResponse(BaseModel):
     info: dict
 
 class ResetRequest(BaseModel):
-    task_id: int
+    task_id: int=1
 
 class ResetResponse(BaseModel):
     observation: dict
@@ -327,7 +327,9 @@ def compute_reward(agent_rows, agent_cols):
     return details["total_reward"], details
 
 @app.post("/reset", response_model=ResetResponse)
-def reset(req: ResetRequest):
+def reset(req: ResetRequest = None):
+    if req is None:
+        req = ResetRequest(task_id=1)
     if req.task_id not in TASKS:
         raise HTTPException(status_code=400, detail="task_id must be 1–8")
     session["task_id"]     = req.task_id
