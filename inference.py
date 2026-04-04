@@ -234,33 +234,20 @@ def main():
     debug(f"API Base   : {API_BASE_URL}")
     debug(f"Env Server : {ENV_BASE_URL}")
 
+    # Get task_id from command line argument or environment variable
+    # Usage: python inference.py 1
+    if len(sys.argv) > 1:
+        task_id = int(sys.argv[1])
+    else:
+        task_id = int(os.environ.get("TASK_ID", "1"))
+
     wait_for_server()
 
-    results     = []
-    total_score = 0.0
-
-    for task_id in TASK_IDS:
-        result = solve_task(task_id)
-        results.append(result)
-        total_score += result["best_reward"]
-
-    debug(f"\n{'='*60}")
-    debug("FINAL RESULTS")
-    debug('='*60)
-
-    for r in results:
-        status = "SOLVED" if r["solved"] else f"best={r['best_reward']:.3f}"
-        debug(f"  Task {r['task_id']} ({r['difficulty']:6s})  {status}  in {r['attempts']} attempt(s)")
-
-    avg_score    = total_score / len(results)
-    tasks_solved = sum(1 for r in results if r["solved"])
-
-    debug(f"\n  Average reward : {avg_score:.3f} / 1.000")
-    debug(f"  Tasks solved   : {tasks_solved} / {len(results)}")
+    result = solve_task(task_id)
 
     with open("results.json", "w") as f:
-        json.dump({"results": results, "avg_score": round(avg_score, 3), "tasks_solved": tasks_solved}, f, indent=2)
-    debug(f"  Results saved to results.json")
+        json.dump({"results": [result], "avg_score": round(result["best_reward"], 3), "tasks_solved": 1 if result["solved"] else 0}, f, indent=2)
+    debug(f"Results saved to results.json")
 
 if __name__ == "__main__":
     main()
