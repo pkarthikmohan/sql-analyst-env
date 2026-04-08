@@ -33,8 +33,8 @@ HF_TOKEN     = os.environ.get("HF_TOKEN")
 def main():
     global client
     client = OpenAI(
-        base_url=API_BASE_URL,
-        api_key=HF_TOKEN if HF_TOKEN else "no-key-needed",
+        base_url=os.environ["API_BASE_URL"],
+        api_key=os.environ["API_KEY"],
     )
     debug("SQL Analyst OpenEnv — Baseline Inference Agent")
     
