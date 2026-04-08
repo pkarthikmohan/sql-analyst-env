@@ -16,36 +16,28 @@ import time
 import requests
 from openai import OpenAI
 from dotenv import load_dotenv
-
 load_dotenv()
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 ENV_BASE_URL = "https://p-karthik-mohan-sql-analyst-env.hf.space"
 MAX_ATTEMPTS = 5
-TASK_IDS     = [1, 2, 3, 4, 5, 6, 7, 8]
 BENCHMARK    = "sql-analyst-env"
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "llama-3.1-8b-instant")
 HF_TOKEN     = os.environ.get("HF_TOKEN")
 
-def main():
-    global client
-    client = OpenAI(
-        base_url=os.environ["API_BASE_URL"],
-        api_key=os.environ["API_KEY"],
-    )
-    debug("SQL Analyst OpenEnv — Baseline Inference Agent")
-    
+# client is initialized inside main() to avoid startup crashes
+client = None
 
-# ── Stdout log functions (mandatory format - stdout only) ─────────────────────
+# ── Stdout log functions (mandatory format) ───────────────────────────────────
 
 def log_start(task, env, model):
     print(f"[START] task={task} env={env} model={model}", flush=True)
 
 def log_step(step, action, reward, done, error=None):
-    action_clean = action.replace("\n", " ").strip()[:120]
+    action_clean = str(action).replace("\n", " ").strip()[:120]
     error_val    = error if error else "null"
     done_val     = str(done).lower()
     print(f"[STEP] step={step} action={action_clean} reward={reward:.2f} done={done_val} error={error_val}", flush=True)
@@ -54,7 +46,7 @@ def log_end(success, steps, rewards):
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}", flush=True)
 
-# ── Debug log (stderr only - never pollutes stdout) ───────────────────────────
+# ── Debug log (stderr only) ───────────────────────────────────────────────────
 
 def debug(msg):
     print(msg, file=sys.stderr, flush=True)
@@ -62,24 +54,24 @@ def debug(msg):
 # ── Environment helpers ───────────────────────────────────────────────────────
 
 def env_reset(task_id):
-    r = requests.post(f"{ENV_BASE_URL}/reset", json={"task_id": task_id})
+    r = requests.post(f"{ENV_BASE_URL}/reset", json={"task_id": task_id}, timeout=30)
     r.raise_for_status()
     return r.json()
 
 def env_step(sql):
-    r = requests.post(f"{ENV_BASE_URL}/step", json={"action": sql})
+    r = requests.post(f"{ENV_BASE_URL}/step", json={"action": sql}, timeout=30)
     r.raise_for_status()
     return r.json()
 
-def wait_for_server(retries=10, delay=2.0):
+def wait_for_server(retries=10, delay=3.0):
     debug("Waiting for environment server...")
     for i in range(retries):
         try:
-            r = requests.get(f"{ENV_BASE_URL}/health", timeout=3)
+            r = requests.get(f"{ENV_BASE_URL}/health", timeout=5)
             if r.status_code == 200:
                 debug("Server is ready.")
                 return
-        except requests.exceptions.ConnectionError:
+        except Exception:
             pass
         debug(f"  Not ready yet... ({i+1}/{retries})")
         time.sleep(delay)
@@ -149,7 +141,17 @@ def ask_llm(task_description, schema, hint, attempt, previous_attempts):
 
 def solve_task(task_id):
     task_name  = f"sql-task-{task_id}"
-    reset_resp = env_reset(task_id)
+
+    try:
+        reset_resp = env_reset(task_id)
+    except Exception as e:
+        debug(f"ERROR resetting task {task_id}: {e}")
+        log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
+        log_step(step=1, action="", reward=0.0, done=False, error=str(e))
+        log_end(success=False, steps=1, rewards=[0.0])
+        return {"task_id": task_id, "task_name": task_name, "difficulty": "unknown",
+                "best_reward": 0.0, "attempts": 1, "solved": False}
+
     obs        = reset_resp["observation"]
     task_desc  = obs["task_description"]
     schema     = obs["schema"]
@@ -178,6 +180,7 @@ def solve_task(task_id):
             debug(f"  SQL: {sql[:120]}{'...' if len(sql) > 120 else ''}")
         except Exception as e:
             error = str(e)
+            debug(f"  LLM error: {error}")
             log_step(step=attempt, action="", reward=0.0, done=False, error=error)
             all_rewards.append(0.0)
             steps_taken = attempt
@@ -190,6 +193,7 @@ def solve_task(task_id):
             details   = step_resp["observation"].get("reward_breakdown", {})
         except Exception as e:
             error = str(e)
+            debug(f"  Step error: {error}")
             log_step(step=attempt, action=sql, reward=0.0, done=False, error=error)
             all_rewards.append(0.0)
             steps_taken = attempt
@@ -233,13 +237,25 @@ def solve_task(task_id):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    global client
+
+    # Initialize client inside main() to avoid import-time crashes
+    try:
+        api_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or "no-key-needed"
+        client = OpenAI(
+            base_url=os.environ.get("API_BASE_URL", API_BASE_URL),
+            api_key=api_key,
+        )
+    except Exception as e:
+        debug(f"ERROR initializing OpenAI client: {e}")
+        sys.exit(1)
+
     debug("SQL Analyst OpenEnv — Baseline Inference Agent")
     debug(f"Model      : {MODEL_NAME}")
     debug(f"API Base   : {API_BASE_URL}")
     debug(f"Env Server : {ENV_BASE_URL}")
 
-    # Get task_id from command line argument or environment variable
-    # Usage: python inference.py 1
+    # Get task_id from command line or environment variable
     if len(sys.argv) > 1:
         task_id = int(sys.argv[1])
     else:
@@ -249,9 +265,16 @@ def main():
 
     result = solve_task(task_id)
 
+    debug(f"\n{'='*60}")
+    debug(f"RESULT: Task {result['task_id']} ({result['difficulty']}) — {'SOLVED' if result['solved'] else f'best={result[chr(98)+chr(101)+chr(115)+chr(116)+chr(95)+chr(114)+chr(101)+chr(119)+chr(97)+chr(114)+chr(100)]:.3f}'}")
+
     with open("results.json", "w") as f:
-        json.dump({"results": [result], "avg_score": round(result["best_reward"], 3), "tasks_solved": 1 if result["solved"] else 0}, f, indent=2)
-    debug(f"Results saved to results.json")
+        json.dump({
+            "results":      [result],
+            "avg_score":    round(result["best_reward"], 3),
+            "tasks_solved": 1 if result["solved"] else 0,
+        }, f, indent=2)
+    debug("Results saved to results.json")
 
 if __name__ == "__main__":
     main()
