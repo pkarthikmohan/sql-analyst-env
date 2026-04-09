@@ -14,9 +14,6 @@ import sys
 import json
 import time
 import requests
-from openai import OpenAI
-from dotenv import load_dotenv
-load_dotenv()
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -28,7 +25,6 @@ API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
 MODEL_NAME   = os.environ.get("MODEL_NAME",   "llama-3.1-8b-instant")
 HF_TOKEN     = os.environ.get("HF_TOKEN")
 
-# client is initialized inside main() to avoid startup crashes
 client = None
 
 # ── Stdout log functions (mandatory format) ───────────────────────────────────
@@ -45,8 +41,6 @@ def log_step(step, action, reward, done, error=None):
 def log_end(success, steps, rewards):
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(f"[END] success={str(success).lower()} steps={steps} rewards={rewards_str}", flush=True)
-
-# ── Debug log (stderr only) ───────────────────────────────────────────────────
 
 def debug(msg):
     print(msg, file=sys.stderr, flush=True)
@@ -140,7 +134,7 @@ def ask_llm(task_description, schema, hint, attempt, previous_attempts):
 # ── Task solver ───────────────────────────────────────────────────────────────
 
 def solve_task(task_id):
-    task_name  = f"sql-task-{task_id}"
+    task_name = f"sql-task-{task_id}"
 
     try:
         reset_resp = env_reset(task_id)
@@ -239,11 +233,11 @@ def solve_task(task_id):
 def main():
     global client
 
-    # Initialize client inside main() to avoid import-time crashes
     try:
-        api_key = os.environ.get("API_KEY") or os.environ.get("HF_TOKEN") or "no-key-needed"
+        from openai import OpenAI
+        api_key = os.environ.get("HF_TOKEN") or os.environ.get("API_KEY") or "no-key-needed"
         client = OpenAI(
-            base_url=os.environ.get("API_BASE_URL", API_BASE_URL),
+            base_url=API_BASE_URL,
             api_key=api_key,
         )
     except Exception as e:
@@ -255,7 +249,6 @@ def main():
     debug(f"API Base   : {API_BASE_URL}")
     debug(f"Env Server : {ENV_BASE_URL}")
 
-    # Get task_id from command line or environment variable
     if len(sys.argv) > 1:
         task_id = int(sys.argv[1])
     else:
@@ -265,8 +258,7 @@ def main():
 
     result = solve_task(task_id)
 
-    debug(f"\n{'='*60}")
-    debug(f"RESULT: Task {result['task_id']} ({result['difficulty']}) — {'SOLVED' if result['solved'] else f'best={result[chr(98)+chr(101)+chr(115)+chr(116)+chr(95)+chr(114)+chr(101)+chr(119)+chr(97)+chr(114)+chr(100)]:.3f}'}")
+    debug(f"\nRESULT: Task {result['task_id']} ({result['difficulty']}) — {'SOLVED' if result['solved'] else 'best=' + str(round(result['best_reward'], 3))}")
 
     with open("results.json", "w") as f:
         json.dump({
