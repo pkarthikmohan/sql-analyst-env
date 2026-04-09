@@ -323,8 +323,11 @@ def compute_reward(agent_rows, agent_cols):
                     matched_cells += 1
         value_score = (matched_cells / total_cells) * 0.40 if total_cells > 0 else 0.0
     details["value_score"]  = round(value_score, 3)
-    details["total_reward"] = round(col_score + row_score + value_score, 3)
-    return details["total_reward"], details
+    total = round(col_score + row_score + value_score, 3)
+    # Clamp to strictly between 0.0 and 1.0 as required by OpenEnv spec
+    total = max(0.001, min(0.999, total))
+    details["total_reward"] = total
+    return total, details
 
 @app.post("/reset", response_model=ResetResponse)
 def reset(req: ResetRequest = None):
@@ -375,7 +378,7 @@ def step(req: StepRequest):
 
     reward, details = compute_reward(agent_rows, agent_cols)
     session["best_reward"] = max(session["best_reward"], reward)
-    done = reward >= 1.0
+    done = reward >= 0.999
     session["history"].append({
         "attempt": session["attempts"], "sql": sql,
         "reward": reward, "details": details,

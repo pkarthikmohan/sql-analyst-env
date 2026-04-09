@@ -18,7 +18,7 @@ import requests
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 ENV_BASE_URL = "https://p-karthik-mohan-sql-analyst-env.hf.space"
-MAX_ATTEMPTS = 5
+MAX_ATTEMPTS = 1
 BENCHMARK    = "sql-analyst-env"
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.groq.com/openai/v1")
