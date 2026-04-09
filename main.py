@@ -377,6 +377,9 @@ def step(req: StepRequest):
         )
 
     reward, details = compute_reward(agent_rows, agent_cols)
+    # Clamp strictly between 0 and 1 as required by OpenEnv spec
+    reward = max(0.001, min(0.999, reward))
+    details["total_reward"] = reward
     session["best_reward"] = max(session["best_reward"], reward)
     done = reward >= 0.999
     session["history"].append({
