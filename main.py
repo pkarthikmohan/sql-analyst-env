@@ -20,7 +20,7 @@ class StepResponse(BaseModel):
     info: dict
 
 class ResetRequest(BaseModel):
-    task_id: int=1
+    task_id: int = 1
 
 class ResetResponse(BaseModel):
     observation: dict
@@ -280,7 +280,7 @@ def compute_reward(agent_rows, agent_cols):
     expected_cols_lower = [c.lower() for c in expected_cols]
     col_matches = sum(1 for c in expected_cols_lower if c in agent_cols_lower)
     col_score = (col_matches / len(expected_cols_lower)) * 0.30 if expected_cols_lower else 0.0
-    details["column_score"]    = round(col_score, 3)
+    details["column_score"]     = round(col_score, 3)
     details["expected_columns"] = expected_cols
     details["agent_columns"]    = agent_cols
 
@@ -322,9 +322,10 @@ def compute_reward(agent_rows, agent_cols):
                 if exp_val == agt_val:
                     matched_cells += 1
         value_score = (matched_cells / total_cells) * 0.40 if total_cells > 0 else 0.0
-    details["value_score"]  = round(value_score, 3)
+
+    details["value_score"] = round(value_score, 3)
     total = round(col_score + row_score + value_score, 3)
-    # Clamp to strictly between 0.0 and 1.0 as required by OpenEnv spec
+    # Clamp strictly between 0 and 1 — required by OpenEnv spec
     total = max(0.001, min(0.999, total))
     details["total_reward"] = total
     return total, details
@@ -334,7 +335,7 @@ def reset(req: ResetRequest = None):
     if req is None:
         req = ResetRequest(task_id=1)
     if req.task_id not in TASKS:
-        raise HTTPException(status_code=400, detail="task_id must be 1–8")
+        raise HTTPException(status_code=400, detail="task_id must be 1-8")
     session["task_id"]     = req.task_id
     session["task"]        = TASKS[req.task_id]
     session["attempts"]    = 0
@@ -363,28 +364,30 @@ def step(req: StepRequest):
     if not re.match(r"^\s*(SELECT|WITH)\b", sql, re.IGNORECASE):
         return StepResponse(
             observation={"error": "Only SELECT or WITH allowed."},
-            reward=0.0, done=False,
+            reward=0.001, done=False,
             info={"attempt": session["attempts"], "message": "Rejected."}
         )
 
     try:
         agent_rows, agent_cols = run_query(sql)
     except Exception as e:
-        session["history"].append({"attempt": session["attempts"], "sql": sql, "reward": 0.0, "error": str(e)})
+        session["history"].append({
+            "attempt": session["attempts"], "sql": sql,
+            "reward": 0.001, "error": str(e)
+        })
         return StepResponse(
-            observation={"error": str(e)}, reward=0.0, done=False,
+            observation={"error": str(e)}, reward=0.001, done=False,
             info={"attempt": session["attempts"], "message": "SQL error."}
         )
 
     reward, details = compute_reward(agent_rows, agent_cols)
-    # Clamp strictly between 0 and 1 as required by OpenEnv spec
-    reward = max(0.001, min(0.999, reward))
-    details["total_reward"] = reward
     session["best_reward"] = max(session["best_reward"], reward)
     done = reward >= 0.999
     session["history"].append({
-        "attempt": session["attempts"], "sql": sql,
-        "reward": reward, "details": details,
+        "attempt":   session["attempts"],
+        "sql":       sql,
+        "reward":    reward,
+        "details":   details,
         "timestamp": datetime.now().isoformat(),
     })
 
@@ -420,9 +423,9 @@ def state():
 @app.get("/")
 def root():
     return {
-        "name":    "SQL Analyst OpenEnv",
-        "version": "2.0.0",
-        "tasks":   {k: {"difficulty": v["difficulty"], "description": v["description"]} for k, v in TASKS.items()},
+        "name":      "SQL Analyst OpenEnv",
+        "version":   "2.0.0",
+        "tasks":     {k: {"difficulty": v["difficulty"], "description": v["description"]} for k, v in TASKS.items()},
         "endpoints": ["/reset", "/step", "/state", "/health"],
     }
 
